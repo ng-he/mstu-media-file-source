@@ -462,7 +462,7 @@ extern "C" fn set_parameter(instance: PluginHandle, field: usize, value: Value) 
 
 /// UI folder, resolved by the host against the plugin library directory.
 extern "C" fn ui() -> Str {
-    Str::from_static("media-file-source-ui")
+    Str::from_static("mstu-media-file-source-ui")
 }
 
 extern "C" fn live_schema() -> *const Schema {

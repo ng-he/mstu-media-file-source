@@ -1,4 +1,4 @@
-# media-file-source
+# mstu-media-file-source
 
 An [mstu](https://github.com/ng-he/mstu) source plugin: reads an MP4 file and
 emits its video samples, paced to the timeline or as fast as the pipeline will
