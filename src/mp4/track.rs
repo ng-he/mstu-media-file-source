@@ -10,7 +10,7 @@ use mstu_media::{
     codec::{
         audio::aac,
         subtitle::ttxt,
-        video::{h264, h265, vp9},
+        video::{av1, h264, h265, vp9},
     },
     nalu,
 };
@@ -98,6 +98,12 @@ impl Track {
             Ok(Codec::VP9(vp9::Parameters {
                 width: vp09.width,
                 height: vp09.height,
+            }))
+        } else if let Some(av01) = &self.trak.mdia.minf.stbl.stsd.av01 {
+            Ok(Codec::AV1(av1::Parameters {
+                profile: av01.av1c.profile,
+                level: av01.av1c.level,
+                config_obus: av01.av1c.config_obus.clone(),
             }))
         } else if let Some(mp4a) = &self.trak.mdia.minf.stbl.stsd.mp4a {
             let bitrate = mp4a.esds.es_desc.dec_config.avg_bitrate;

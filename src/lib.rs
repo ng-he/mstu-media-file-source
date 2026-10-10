@@ -1,5 +1,8 @@
 use std::{
-    path::PathBuf, ptr,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    ptr,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::{Duration, Instant},
     vec,
@@ -7,7 +10,7 @@ use std::{
 
 use mstu_media::{
     self as media,
-    Codec::{H264, H265},
+    Codec::{AV1, H264, H265, VP9},
 };
 use mstu_sdk::{
     CommandDescriptor, EventDescriptor, HostContext, Logger, Message, Metadata, PluginDescriptor,
@@ -46,6 +49,10 @@ pub struct MediaFileSourcePlugin {
     position: AtomicU64,
     duration: AtomicU64,
 
+    /// Written in front of every sample. AV1 keeps its temporal delimiter
+    /// outside the file, and a stream without one cannot be cut into frames.
+    lead_in: &'static [u8],
+
     /// Playback speed: 1.0 real time, 0 as fast as the pipeline will take it.
     rate: f64,
     looping: bool,
@@ -59,6 +66,27 @@ pub struct MediaFileSourcePlugin {
 /// far behind means the clock jumped: a pause, a seek, or a slow consumer.
 const MAX_LAG: Duration = Duration::from_millis(500);
 
+/// The first box of a file in the ISO base media format: mp4, mov, m4v, 3gp
+/// and the rest of the family, whatever the name says.
+///
+/// Read rather than taken from the extension, since one of those is a fact
+/// and the other is a hint.
+fn is_iso_bmff(path: &Path) -> bool {
+    const FIRST: [&[u8; 4]; 7] = [b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot"];
+
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+
+    let mut header = [0u8; 8];
+
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+
+    FIRST.iter().any(|name| header[4..8] == **name)
+}
+
 impl MediaFileSourcePlugin {
     fn new(ctx: *const HostContext, id: String) -> Self {
         let log = Logger::new(ctx, unsafe { METADATA.name.as_str() }, id.as_str());
@@ -69,6 +97,7 @@ impl MediaFileSourcePlugin {
             id,
             filename: String::new(),
             sample_reader: None,
+            lead_in: &[],
             samples: AtomicU64::new(0),
             ended: AtomicBool::new(false),
             position: AtomicU64::new(0),
@@ -154,20 +183,21 @@ impl MediaFileSourcePlugin {
         self.ended.store(false, Ordering::Relaxed);
         self.position.store(0, Ordering::Relaxed);
         self.anchor = None;
+        self.lead_in = &[];
 
-        if path.extension().and_then(|s| s.to_str()) == Some("mp4") {
-            match mp4::open(path) {
-                Ok(reader) => {
-                    self.sample_reader = Some(Box::new(reader));
-                }
-                Err(err) => {
-                    log_error!(self.log, "cannot open '{}': {err}", self.filename);
-                    return false;
-                }
-            }
-        } else {
+        if !is_iso_bmff(&path) {
             log_error!(self.log, "unsupported media file '{}'", self.filename);
             return false;
+        }
+
+        match mp4::open(path) {
+            Ok(reader) => {
+                self.sample_reader = Some(Box::new(reader));
+            }
+            Err(err) => {
+                log_error!(self.log, "cannot open '{}': {err}", self.filename);
+                return false;
+            }
         }
 
         let mut codec = Str::empty();
@@ -194,6 +224,24 @@ impl MediaFileSourcePlugin {
                         }
                     }
                 }
+                // The samples are already obus; the sequence header in front
+                // of them is what makes the stream startable.
+                AV1(params) => {
+                    codec = Str::from_static("av1");
+                    extras.extend_from_slice(&params.config_obus);
+
+                    // A temporal delimiter per sample, which the file leaves
+                    // out because each sample is one temporal unit already.
+                    self.lead_in = &[0x12, 0x00];
+                }
+
+                // Frames as the file stores them, which carry their own
+                // headers. Anything downstream that wants them framed has to
+                // frame them itself.
+                VP9(_) => {
+                    codec = Str::from_static("vp9");
+                }
+
                 _ => {
                     log_error!(self.log, "unsupported codec type");
                     return false;
@@ -278,19 +326,24 @@ impl MediaFileSourcePlugin {
         }
 
         // Read straight into the message: the plugin never holds the payload.
-        let payload = (output.reserve)(output, sample.size);
+        let size = self.lead_in.len() + sample.size;
+        let payload = (output.reserve)(output, size);
 
         if payload.is_null() {
             return Err("the message would not take the sample".to_string());
         }
 
+        let room = unsafe { std::slice::from_raw_parts_mut(payload, size) };
+        let (lead_in, rest) = room.split_at_mut(self.lead_in.len());
+        lead_in.copy_from_slice(self.lead_in);
+
         let Some(reader) = self.sample_reader.as_mut() else {
             return Ok(());
         };
 
-        reader.read_sample(unsafe { std::slice::from_raw_parts_mut(payload, sample.size) })?;
+        reader.read_sample(rest)?;
 
-        let bytes = Slice::from_raw_parts(payload, sample.size);
+        let bytes = Slice::from_raw_parts(payload, size);
         let samples = self.samples.fetch_add(1, Ordering::Relaxed) + 1;
 
         self.position

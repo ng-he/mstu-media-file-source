@@ -10,6 +10,7 @@ pub struct Stsd {
     pub avc1: Option<atom::Avc1>,
     pub hev1: Option<atom::Hev1>,
     pub vp09: Option<atom::Vp09>,
+    pub av01: Option<atom::Av01>,
     pub mp4a: Option<atom::Mp4a>,
     pub tx3g: Option<atom::Tx3g>,
 }
@@ -25,6 +26,7 @@ impl Stsd {
         let mut avc1 = None;
         let mut hev1 = None;
         let mut vp09 = None;
+        let mut av01 = None;
         let mut mp4a = None;
         let mut tx3g = None;
 
@@ -37,14 +39,20 @@ impl Stsd {
         }
 
         match name {
-            atom::constant_name::AVC1 => {
+            // avc3 and hvc1 differ from avc1 and hev1 only in where the
+            // parameter sets live, which the reader takes from the stream
+            // either way.
+            atom::constant_name::AVC1 | atom::constant_name::AVC3 => {
                 avc1 = Some(atom::Avc1::read(reader, s)?);
             }
-            atom::constant_name::HEV1 => {
+            atom::constant_name::HEV1 | atom::constant_name::HVC1 => {
                 hev1 = Some(atom::Hev1::read(reader, s)?);
             }
             atom::constant_name::VP09 => {
                 vp09 = Some(atom::Vp09::read(reader, s)?);
+            }
+            atom::constant_name::AV01 => {
+                av01 = Some(atom::Av01::read(reader, s)?);
             }
             atom::constant_name::MP4A => {
                 mp4a = Some(atom::Mp4a::read(reader, s)?);
@@ -63,6 +71,7 @@ impl Stsd {
             avc1,
             hev1,
             vp09,
+            av01,
             mp4a,
             tx3g,
         })

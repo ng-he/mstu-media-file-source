@@ -38,6 +38,7 @@ pub mod trex;
 pub mod tx3g;
 pub mod udta;
 pub mod vmhd;
+pub mod av01;
 pub mod vp09;
 
 pub use avc1::Avc1;
@@ -74,6 +75,7 @@ pub use trex::Trex;
 pub use tx3g::Tx3g;
 pub use udta::Udta;
 pub use vmhd::Vmhd;
+pub use av01::{Av01, Av1c};
 pub use vp09::Vp09;
 
 pub const HEADER_SIZE: u64 = 8;
@@ -146,7 +148,11 @@ pub mod constant_name {
 
     // Sample entry / codec atoms
     pub const AVC1: FourCC = FourCC::from(*b"avc1");
+    /// Same layout as avc1; the parameter sets travel in the stream.
+    pub const AVC3: FourCC = FourCC::from(*b"avc3");
     pub const HEV1: FourCC = FourCC::from(*b"hev1");
+    /// Same layout as hev1, written by anything Apple touches.
+    pub const HVC1: FourCC = FourCC::from(*b"hvc1");
     pub const MP4A: FourCC = FourCC::from(*b"mp4a");
     pub const TX3G: FourCC = FourCC::from(*b"tx3g");
     pub const AVCC: FourCC = FourCC::from(*b"avcC");
@@ -154,6 +160,8 @@ pub mod constant_name {
     pub const ESDS: FourCC = FourCC::from(*b"esds");
     pub const VPCC: FourCC = FourCC::from(*b"vpcC");
     pub const VP09: FourCC = FourCC::from(*b"vp09");
+    pub const AV01: FourCC = FourCC::from(*b"av01");
+    pub const AV1C: FourCC = FourCC::from(*b"av1C");
 
     // Misc/container-ish
     pub const WIDE: FourCC = FourCC::from(*b"wide");

@@ -3,7 +3,7 @@ use bytes::Bytes;
 use std::{
     collections::HashMap,
     fs::{self},
-    io::{BufReader, Read, Seek},
+    io::{BufReader, Read, Seek, SeekFrom},
     matches,
     path::PathBuf,
     time::Duration,
@@ -185,6 +185,9 @@ pub struct File {
     video_track_id: u32,
     current_sample_id: u32,
 
+    /// Whether the samples carry their own AV1 sequence header.
+    inband_sequence_header: bool,
+
     /// Only for prefixes shorter than 4 bytes, where Annex-B does not fit
     /// where AVCC was.
     converted: Option<Bytes>,
@@ -238,20 +241,66 @@ pub fn open(path: PathBuf) -> Result<File> {
         .map(|(id, _)| *id)
         .ok_or(Error::InvalidData("video track not found"))?;
 
+    let inband_sequence_header = starts_with_sequence_header(&reader, &mut buf_reader, video_track_id);
+
     Ok(File {
         buf_reader,
         reader,
         video_track_id,
         current_sample_id: 1,
         converted: None,
+        inband_sequence_header,
     })
 }
 
+/// Whether the first sample opens with an AV1 sequence header.
+///
+/// One in the stream and a second from the configuration are two answers to
+/// the same question, and a decoder given both reads neither.
+fn starts_with_sequence_header<R: Read + Seek>(
+    reader: &Reader,
+    source: &mut R,
+    track_id: u32,
+) -> bool {
+    let Some(track) = reader.tracks.get(&track_id) else {
+        return false;
+    };
+
+    let Ok(offset) = track.sample_offset(1) else {
+        return false;
+    };
+
+    if source.seek(SeekFrom::Start(offset)).is_err() {
+        return false;
+    }
+
+    let mut header = [0u8; 1];
+
+    if source.read_exact(&mut header).is_err() {
+        return false;
+    }
+
+    // obu_type sits in the four bits under the forbidden bit.
+    (header[0] >> 3) & 0x0F == OBU_SEQUENCE_HEADER
+}
+
+const OBU_SEQUENCE_HEADER: u8 = 1;
+
 impl file::SampleReader for File {
     fn codec(&self) -> mstu_media::Codec {
-        self.reader.tracks[&self.video_track_id]
+        let codec = self.reader.tracks[&self.video_track_id]
             .media_format()
-            .unwrap()
+            .unwrap();
+
+        match codec {
+            mstu_media::Codec::AV1(params) if self.inband_sequence_header => {
+                mstu_media::Codec::AV1(mstu_media::codec::video::av1::Parameters {
+                    config_obus: bytes::Bytes::new(),
+                    ..params
+                })
+            }
+            other => other,
+        }
     }
 
     fn peek_sample(&mut self) -> std::result::Result<Option<SampleInfo>, String> {
