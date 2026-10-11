@@ -23,6 +23,21 @@ parsed but not emitted.
 Raises `file.changed` when a file is opened, carrying the codec and whatever a
 decoder needs in front of the stream, and `file.ended` at the end of it.
 
+## Testing
+
+```sh
+./test.sh
+```
+
+Which is what the center repository calls, so it need not know this one is
+written in Rust.
+
+`test_samples/` holds short clips written by a real encoder, one per codec and
+container the reader claims, plus files with reordered frames, sparse
+keyframes, sound beside the picture, and one written in fragments. They are
+committed, so the tests need no ffmpeg; `test_samples/generate.sh` says how
+each was made and prints the counts the tests check against.
+
 ```sh
 ./build.sh
 ```

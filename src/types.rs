@@ -197,3 +197,98 @@ impl_lower_hex_fmt!(FixedU16);
 impl_lower_hex_fmt!(FixedU8);
 impl_lower_hex_fmt!(Fixed2_30);
 impl_lower_hex_fmt!(FixedI8);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The examples the layout above is documented with, which is what a file
+    /// actually writes for a sample rate, a volume or a matrix.
+    #[test]
+    fn sixteen_sixteen_splits_where_it_says() {
+        let one = FixedU16::from_raw(0x0001_0000);
+        let half = FixedU16::from_raw(0x0000_8000);
+        let one_and_a_half = FixedU16::from_raw(0x0001_8000);
+
+        assert_eq!(one.as_f32(), 1.0);
+        assert_eq!(half.as_f32(), 0.5);
+        assert_eq!(one_and_a_half.as_f32(), 1.5);
+
+        assert_eq!(one_and_a_half.integer(), 1);
+        assert_eq!(one_and_a_half.fraction(), 0x8000);
+        assert_eq!(one_and_a_half.raw(), 0x0001_8000);
+    }
+
+    /// A sample rate is written this way, and 44100 is the one everybody has.
+    #[test]
+    fn a_sample_rate_comes_back_as_itself() {
+        let rate = FixedU16::from_raw(44_100 << 16);
+
+        assert_eq!(rate.integer(), 44_100);
+        assert_eq!(rate.as_f32(), 44_100.0);
+        assert_eq!(rate.fraction(), 0);
+    }
+
+    #[test]
+    fn eight_eight_splits_where_it_says() {
+        let one = FixedU8::from_raw(0x0100);
+        let half = FixedU8::from_raw(0x0080);
+        let one_and_a_half = FixedU8::from_raw(0x0180);
+
+        assert_eq!(one.as_f32(), 1.0);
+        assert_eq!(half.as_f32(), 0.5);
+        assert_eq!(one_and_a_half.as_f32(), 1.5);
+
+        assert_eq!(one_and_a_half.integer(), 1);
+        assert_eq!(one_and_a_half.fraction(), 0x80);
+        assert_eq!(one_and_a_half.raw(), 0x0180);
+    }
+
+    /// The signed one, which a matrix uses for anything mirrored.
+    #[test]
+    fn a_signed_eight_eight_keeps_its_sign() {
+        let minus_one = FixedI8::from_raw(-0x0100);
+
+        assert_eq!(minus_one.as_f32(), -1.0);
+        assert_eq!(minus_one.integer(), -1);
+        assert_eq!(minus_one.raw(), -0x0100);
+
+        assert_eq!(FixedI8::from_raw(0x0080).as_f32(), 0.5);
+        assert_eq!(FixedI8::from_raw(0).as_f32(), 0.0);
+    }
+
+    /// The matrix's bottom row is written 2.30, where 0x40000000 is one.
+    #[test]
+    fn two_thirty_puts_one_where_the_matrix_expects_it() {
+        let one = Fixed2_30::from_raw(0x4000_0000);
+
+        assert_eq!(one.as_f32(), 1.0);
+        assert_eq!(one.integer(), 1);
+        assert_eq!(one.raw(), 0x4000_0000);
+
+        assert_eq!(Fixed2_30::from_raw(0x2000_0000).as_f32(), 0.5);
+        assert_eq!(Fixed2_30::from_raw(0).as_f32(), 0.0);
+        assert_eq!(Fixed2_30::from_raw(-0x4000_0000).as_f32(), -1.0);
+    }
+
+    /// Whatever went in comes back out, which is what the readers rely on
+    /// when they hand a raw field straight to one of these.
+    #[test]
+    fn every_raw_value_survives_the_round_trip() {
+        for raw in [0u32, 1, 0x0001_0000, 0x8000_0000, u32::MAX] {
+            assert_eq!(FixedU16::from_raw(raw).raw(), raw);
+        }
+
+        for raw in [0u16, 1, 0x0100, u16::MAX] {
+            assert_eq!(FixedU8::from_raw(raw).raw(), raw);
+        }
+
+        for raw in [0i16, -1, 0x0100, i16::MIN, i16::MAX] {
+            assert_eq!(FixedI8::from_raw(raw).raw(), raw);
+        }
+
+        for raw in [0i32, -1, 0x4000_0000, i32::MIN, i32::MAX] {
+            assert_eq!(Fixed2_30::from_raw(raw).raw(), raw);
+        }
+    }
+}

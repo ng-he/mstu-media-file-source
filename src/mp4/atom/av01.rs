@@ -137,3 +137,73 @@ impl Av1c {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, Seek, SeekFrom};
+
+    use super::*;
+
+    /// An av1C as ffmpeg writes one: four bytes of fields, then the sequence
+    /// header obu the stream starts from.
+    const AV1C: &[u8] = &[
+        0x00, 0x00, 0x00, 0x15, 0x61, 0x76, 0x31, 0x43, // box header
+        0x81, 0x00, 0x0c, 0x00, // marker, version, profile, level, flags
+        0x0a, 0x0b, 0x00, 0x00, 0x00, 0x04, 0x3c, 0xff, 0xbc, 0x02, 0xf8, 0x00, 0x40,
+    ];
+
+    fn read(bytes: &[u8]) -> Result<Av1c> {
+        let mut reader = Cursor::new(bytes);
+        reader.seek(SeekFrom::Start(8)).unwrap();
+
+        Av1c::read(&mut reader, bytes.len() as u64)
+    }
+
+    #[test]
+    fn keeps_the_sequence_header_exactly_as_written() {
+        let av1c = read(AV1C).unwrap();
+
+        assert_eq!(av1c.profile, 0);
+        assert_eq!(av1c.level, 0);
+        assert_eq!(av1c.bit_depth, 8);
+        assert!(!av1c.monochrome);
+        assert_eq!(
+            av1c.config_obus.as_ref(),
+            &AV1C[12..],
+            "the obus are passed through untouched"
+        );
+    }
+
+    #[test]
+    fn reads_profile_level_and_depth_out_of_their_bits() {
+        let mut bytes = AV1C.to_vec();
+        bytes[9] = 0b001_01101; // profile 1, level 13
+        bytes[10] = 0b1_1_1_1_0000; // tier 1, high bitdepth, twelve bit, monochrome
+
+        let av1c = read(&bytes).unwrap();
+
+        assert_eq!(av1c.profile, 1);
+        assert_eq!(av1c.level, 13);
+        assert_eq!(av1c.tier, 1);
+        assert_eq!(av1c.bit_depth, 12);
+        assert!(av1c.monochrome);
+    }
+
+    #[test]
+    fn refuses_a_record_without_its_marker() {
+        let mut bytes = AV1C.to_vec();
+        bytes[8] = 0x01; // marker bit cleared
+
+        assert!(read(&bytes).is_err());
+    }
+
+    #[test]
+    fn a_record_carrying_no_obus_is_still_read() {
+        let mut bytes = AV1C[..12].to_vec();
+        bytes[3] = 12; // the box is only its fields
+
+        let av1c = read(&bytes).unwrap();
+
+        assert!(av1c.config_obus.is_empty());
+    }
+}

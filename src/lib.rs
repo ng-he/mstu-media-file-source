@@ -200,6 +200,31 @@ impl MediaFileSourcePlugin {
             }
         }
 
+        // A file whose sample table is empty parses and plays nothing, which
+        // is worse than refusing it: the pipeline would sit there waiting on
+        // a source that will never produce. Fragmented files look like this,
+        // since their samples are described in pieces further in.
+        let empty = match self.sample_reader.as_mut().map(|reader| reader.peek_sample()) {
+            Some(Ok(None)) => true,
+            Some(Err(err)) => {
+                log_error!(self.log, "cannot read '{}': {err}", self.filename);
+                self.sample_reader = None;
+                return false;
+            }
+            _ => false,
+        };
+
+        if empty {
+            log_error!(
+                self.log,
+                "'{}' holds no samples to play; a fragmented file is not read yet",
+                self.filename
+            );
+
+            self.sample_reader = None;
+            return false;
+        }
+
         let mut codec = Str::empty();
         let mut extras: Vec<u8> = vec![];
 
@@ -266,26 +291,33 @@ impl MediaFileSourcePlugin {
         );
 
         unsafe {
-            let event_writer =
-                &mut *(((*self.ctx).new_event)(Str::new(self.id.as_str()), 0) as *mut Writer);
+            // The host hands back nothing if it has no such event to fill,
+            // and a file that opened is still open either way.
+            let writer = ((*self.ctx).new_event)(Str::new(self.id.as_str()), 0) as *mut Writer;
 
-            let values = [
-                Str::new(self.filename.as_str()).into(),
-                codec.into(),
-                Slice::from(extras.as_slice()).into(),
-            ];
+            if writer.is_null() {
+                log_warn!(self.log, "the host took no file.changed to fill");
+            } else {
+                let event_writer = &mut *writer;
 
-            (event_writer.fill)(
-                event_writer,
-                Message {
-                    values: Slice::from_raw_parts(values.as_ptr(), values.len()),
-                },
-            );
+                let values = [
+                    Str::new(self.filename.as_str()).into(),
+                    codec.into(),
+                    Slice::from(extras.as_slice()).into(),
+                ];
 
-            ((*self.ctx).publish_events)(Str::new(self.id.as_str()), 0);
+                (event_writer.fill)(
+                    event_writer,
+                    Message {
+                        values: Slice::from_raw_parts(values.as_ptr(), values.len()),
+                    },
+                );
+
+                ((*self.ctx).publish_events)(Str::new(self.id.as_str()), 0);
+
+                log_info!(self.log, "published file.changed for '{}'", self.filename);
+            }
         }
-
-        log_info!(self.log, "published file.changed for '{}'", self.filename);
 
         self.publish_live();
 
@@ -561,4 +593,541 @@ static PLUGIN: PluginDescriptor = PluginDescriptor {
 #[unsafe(no_mangle)]
 pub extern "C" fn plugin_descriptor() -> *const PluginDescriptor {
     &PLUGIN
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    /// A file of its own, named after the test that wants it.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn with(name: &str, bytes: &[u8]) -> Self {
+            let path = std::env::temp_dir().join(format!("mstu-{}-{name}", std::process::id()));
+            fs::write(&path, bytes).expect("a file to test with");
+
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    fn box_named(name: &[u8; 4]) -> Vec<u8> {
+        let mut bytes = vec![0, 0, 0, 0x14];
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(b"qt  \0\0\0\0");
+
+        bytes
+    }
+
+    #[test]
+    fn knows_the_family_by_its_first_box() {
+        for name in [b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot"] {
+            let file = Scratch::with("first", &box_named(name));
+
+            assert!(
+                is_iso_bmff(&file.0),
+                "{} should be read as iso base media",
+                std::str::from_utf8(name).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn turns_down_what_is_not_media() {
+        // A zip, a script, and something too short to say.
+        for bytes in [&b"PK\x03\x04____"[..], &b"@echo off\r\n"[..], &b"abc"[..]] {
+            let file = Scratch::with("other", bytes);
+
+            assert!(!is_iso_bmff(&file.0));
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_not_there_is_not_media() {
+        assert!(!is_iso_bmff(Path::new("/nowhere/at/all.mp4")));
+    }
+
+    /// The name is a hint and the bytes are the fact.
+    #[test]
+    fn the_extension_has_no_say() {
+        let file = Scratch::with("named.txt", &box_named(b"ftyp"));
+
+        assert!(is_iso_bmff(&file.0));
+    }
+
+    // ---------- the plugin itself, without an engine behind it ----------
+
+    extern "C" fn log_nothing(_: mstu_sdk::LogLevel, _: Str, _: Str) {}
+
+    extern "C" fn log_disabled(_: mstu_sdk::LogLevel) -> bool {
+        false
+    }
+
+    extern "C" fn no_event(_: Str, _: usize) -> *const message::Writer {
+        ptr::null()
+    }
+
+    extern "C" fn no_publish(_: Str, _: usize) {}
+    extern "C" fn no_live(_: Str, _: Message) {}
+
+    /// A host that answers every call with nothing.
+    pub fn host() -> Box<HostContext> {
+        Box::new(HostContext {
+            logger: log_nothing,
+            log_enabled: log_disabled,
+            new_event: no_event,
+            publish_events: no_publish,
+            publish_live: no_live,
+        })
+    }
+
+    /// A plugin with a file open, built from the bytes of a fixture.
+    fn opened(ctx: &HostContext, video: &crate::mp4::fixture::Video) -> (MediaFileSourcePlugin, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("mstu-source-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("somewhere to put it");
+
+        let path = dir.join(format!("{}.mp4", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()));
+
+        fs::write(&path, crate::mp4::fixture::file(video)).expect("a file to open");
+
+        let mut plugin = MediaFileSourcePlugin::new(ctx, "TEST".to_string());
+        assert!(plugin.open(path.clone()), "the fixture should open");
+
+        (plugin, path)
+    }
+
+    #[test]
+    fn a_file_that_opens_says_how_long_it_is() {
+        let ctx = host();
+        let video = crate::mp4::fixture::Video {
+            timescale: 1000,
+            delta: 100,
+            sizes: vec![10, 20, 30, 40],
+            ..Default::default()
+        };
+
+        let (plugin, path) = opened(&ctx, &video);
+
+        // Four samples of a tenth of a second each.
+        assert_eq!(plugin.duration.load(Ordering::Relaxed), 400_000);
+        assert_eq!(plugin.samples.load(Ordering::Relaxed), 0);
+        assert!(!plugin.ended.load(Ordering::Relaxed));
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// Media time is counted in whatever the file counts in, and the UI wants
+    /// microseconds.
+    #[test]
+    fn media_time_becomes_microseconds() {
+        let ctx = host();
+        let video = crate::mp4::fixture::Video {
+            timescale: 90_000,
+            ..Default::default()
+        };
+
+        let (plugin, path) = opened(&ctx, &video);
+
+        assert_eq!(plugin.micros(90_000), 1_000_000);
+        assert_eq!(plugin.micros(45_000), 500_000);
+        assert_eq!(plugin.micros(0), 0);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn with_no_file_open_nothing_has_a_time() {
+        let ctx = host();
+        let plugin = MediaFileSourcePlugin::new(&*ctx, "TEST".to_string());
+
+        assert_eq!(plugin.micros(1000), 0);
+    }
+
+    /// Pacing: a sample is due as far after the anchor as it sits after the
+    /// anchor's sample, divided by the speed.
+    #[test]
+    fn a_sample_is_due_at_its_place_in_the_timeline() {
+        let ctx = host();
+        let video = crate::mp4::fixture::Video {
+            timescale: 1000,
+            ..Default::default()
+        };
+
+        let (mut plugin, path) = opened(&ctx, &video);
+
+        plugin.anchor_at(0);
+        let anchor = plugin.anchor.expect("an anchor");
+
+        // A second of media is a second away at normal speed.
+        let due = plugin.due(1000).expect("a due time");
+        assert_eq!(due.duration_since(anchor), Duration::from_secs(1));
+
+        // Twice the speed is half the wait.
+        plugin.rate = 2.0;
+        let due = plugin.due(1000).expect("a due time");
+        assert_eq!(due.duration_since(anchor), Duration::from_millis(500));
+
+        // As fast as possible means everything is due at once.
+        plugin.rate = 0.0;
+        assert_eq!(plugin.due(100_000).expect("a due time"), anchor);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn nothing_is_due_until_the_clock_has_been_started() {
+        let ctx = host();
+        let video = crate::mp4::fixture::Video::default();
+        let (mut plugin, path) = opened(&ctx, &video);
+
+        plugin.anchor = None;
+
+        assert!(plugin.due(1000).is_none());
+
+        let _ = fs::remove_file(path);
+    }
+
+    /// Seeking moves where playback is and starts the clock again from there,
+    /// so what follows is paced from the new place rather than bursting.
+    #[test]
+    fn seeking_moves_the_position_and_restarts_the_clock() {
+        let ctx = host();
+        let video = crate::mp4::fixture::Video {
+            timescale: 1000,
+            delta: 100,
+            sizes: vec![10; 10],
+            ..Default::default()
+        };
+
+        let (mut plugin, path) = opened(&ctx, &video);
+
+        plugin.ended.store(true, Ordering::Relaxed);
+        plugin.seek_to(500_000);
+
+        assert_eq!(plugin.position.load(Ordering::Relaxed), 500_000);
+        assert!(!plugin.ended.load(Ordering::Relaxed), "there is more to read");
+        assert!(plugin.anchor.is_some(), "the clock starts again from here");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn opening_a_second_file_forgets_the_first() {
+        let ctx = host();
+
+        let short = crate::mp4::fixture::Video {
+            sizes: vec![10, 10],
+            ..Default::default()
+        };
+
+        let (mut plugin, first) = opened(&ctx, &short);
+
+        plugin.samples.store(7, Ordering::Relaxed);
+        plugin.ended.store(true, Ordering::Relaxed);
+
+        let longer = crate::mp4::fixture::Video {
+            sizes: vec![10; 8],
+            ..Default::default()
+        };
+
+        let dir = std::env::temp_dir().join(format!("mstu-source-{}", std::process::id()));
+        let second = dir.join("second.mp4");
+        fs::write(&second, crate::mp4::fixture::file(&longer)).expect("a second file");
+
+        assert!(plugin.open(second.clone()));
+
+        assert_eq!(plugin.samples.load(Ordering::Relaxed), 0);
+        assert!(!plugin.ended.load(Ordering::Relaxed));
+        assert_eq!(plugin.position.load(Ordering::Relaxed), 0);
+
+        let _ = fs::remove_file(first);
+        let _ = fs::remove_file(second);
+    }
+
+    /// An av1 stream needs a temporal delimiter in front of every sample; the
+    /// others need nothing.
+    #[test]
+    fn only_av1_is_given_something_in_front_of_each_sample() {
+        let ctx = host();
+
+        let h264 = crate::mp4::fixture::Video::default();
+        let (plugin, path) = opened(&ctx, &h264);
+
+        assert!(plugin.lead_in.is_empty());
+        let _ = fs::remove_file(path);
+
+        let av1 = crate::mp4::fixture::Video {
+            entry: crate::mp4::fixture::av01(),
+            ..Default::default()
+        };
+
+        let (plugin, path) = opened(&ctx, &av1);
+
+        assert_eq!(plugin.lead_in, &[0x12, 0x00]);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_file_that_is_not_media_does_not_open() {
+        let ctx = host();
+        let mut plugin = MediaFileSourcePlugin::new(&*ctx, "TEST".to_string());
+
+        let dir = std::env::temp_dir().join(format!("mstu-source-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("somewhere to put it");
+
+        let path = dir.join("script.mp4");
+        fs::write(&path, b"@echo off\r\n").expect("a file that is not media");
+
+        assert!(!plugin.open(path.clone()));
+
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// The plugin against files a real encoder wrote.
+///
+/// The fixtures elsewhere prove the arithmetic on tables written on purpose;
+/// these prove the reader against what encoders actually produce. The files
+/// live in `test_samples/` and are committed, so nothing has to be encoded to
+/// run the tests; `test_samples/generate.sh` says how each one was made and
+/// prints the counts the table below is checked against.
+#[cfg(test)]
+mod real_files {
+    use mstu_media::Codec;
+
+    use super::tests::host;
+    use super::*;
+
+    /// What is in each file, as ffprobe read it when they were made.
+    struct Sample {
+        file: &'static str,
+        codec: &'static str,
+        frames: u64,
+
+        /// How many of those can be decoded from cold.
+        keys: u64,
+    }
+
+    const SAMPLES: [Sample; 9] = [
+        Sample { file: "h264.mp4", codec: "h264", frames: 60, keys: 1 },
+        Sample { file: "h264.mov", codec: "h264", frames: 60, keys: 1 },
+        Sample { file: "hvc1.mp4", codec: "hevc", frames: 60, keys: 1 },
+        Sample { file: "hev1.mp4", codec: "hevc", frames: 60, keys: 1 },
+        Sample { file: "av1.mp4", codec: "av1", frames: 60, keys: 1 },
+        Sample { file: "vp9.mp4", codec: "vp9", frames: 60, keys: 1 },
+        Sample { file: "bframes.mp4", codec: "h264", frames: 60, keys: 1 },
+        Sample { file: "longgop.mp4", codec: "h264", frames: 60, keys: 3 },
+        Sample { file: "inorder.mp4", codec: "h264", frames: 60, keys: 1 },
+    ];
+
+    fn sample(name: &str) -> PathBuf {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_samples")
+            .join(name);
+
+        assert!(
+            path.is_file(),
+            "{} is missing; test_samples/generate.sh writes it",
+            path.display()
+        );
+
+        path
+    }
+
+    /// The plugin with that file open, or None if it would not open.
+    fn opened(ctx: &HostContext, path: &Path) -> Option<MediaFileSourcePlugin> {
+        let mut plugin = MediaFileSourcePlugin::new(ctx, "TEST".to_string());
+
+        plugin.open(path.to_path_buf()).then_some(plugin)
+    }
+
+    fn codec_name(plugin: &MediaFileSourcePlugin) -> &'static str {
+        match plugin.sample_reader.as_ref().expect("a reader").codec() {
+            Codec::H264(_) => "h264",
+            Codec::H265(_) => "hevc",
+            Codec::AV1(_) => "av1",
+            Codec::VP9(_) => "vp9",
+            Codec::AAC(_) => "aac",
+            Codec::TTXT(_) => "ttxt",
+        }
+    }
+
+    /// Reads to the end: how many samples came out, how many said they can be
+    /// decoded from cold, and how many are shown out of the order they are
+    /// stored in.
+    fn read_all(plugin: &mut MediaFileSourcePlugin) -> (u64, u64, u64) {
+        let mut samples = 0;
+        let mut sync = 0;
+        let mut moved = 0;
+
+        while let Some(info) = plugin
+            .sample_reader
+            .as_mut()
+            .expect("a reader")
+            .peek_sample()
+            .expect("a sample or the end")
+        {
+            let mut into = vec![0u8; info.size];
+
+            plugin
+                .sample_reader
+                .as_mut()
+                .unwrap()
+                .read_sample(&mut into)
+                .expect("the bytes");
+
+            assert!(info.size > 0, "a sample of nothing");
+            assert!(into.iter().any(|byte| *byte != 0), "a sample of zeroes");
+
+            samples += 1;
+            sync += u64::from(info.is_sync);
+            moved += u64::from(info.rendering_offset != 0);
+        }
+
+        (samples, sync, moved)
+    }
+
+    /// Every file in the folder, read to the end and counted against what is
+    /// known to be in it.
+    #[test]
+    fn every_sample_file_opens_and_reads_to_the_end() {
+        let ctx = host();
+
+        for expected in SAMPLES {
+            let path = sample(expected.file);
+            let mut plugin = opened(&ctx, &path)
+                .unwrap_or_else(|| panic!("{} should open", expected.file));
+
+            assert_eq!(codec_name(&plugin), expected.codec, "{}", expected.file);
+            assert!(
+                plugin.duration.load(Ordering::Relaxed) > 0,
+                "{} should know how long it is",
+                expected.file
+            );
+
+            let (samples, sync, _) = read_all(&mut plugin);
+
+            assert_eq!(samples, expected.frames, "{} sample count", expected.file);
+            assert_eq!(sync, expected.keys, "{} keyframe count", expected.file);
+        }
+    }
+
+    /// Frames shown in a different order than they are stored, which is what
+    /// the composition table is for.
+    #[test]
+    fn a_file_with_reordered_frames_says_how_far_each_one_moves() {
+        let ctx = host();
+        let mut plugin = opened(&ctx, &sample("bframes.mp4")).expect("it should open");
+
+        let (_, _, moved) = read_all(&mut plugin);
+
+        assert!(moved > 0, "three b-frames deep, something should be reordered");
+
+        // x264 reorders by default, so the file to compare against is the
+        // one encoded with that turned off.
+        let mut plain = opened(&ctx, &sample("inorder.mp4")).expect("it should open");
+        let (_, _, moved) = read_all(&mut plain);
+
+        assert_eq!(moved, 0, "in order, nothing moves");
+    }
+
+    /// Only some samples start a group, and only those can be seeked to.
+    #[test]
+    fn a_file_with_sparse_keyframes_marks_only_those() {
+        let ctx = host();
+        let mut plugin = opened(&ctx, &sample("longgop.mp4")).expect("it should open");
+
+        let (samples, sync, _) = read_all(&mut plugin);
+
+        assert_eq!(sync, 3, "three groups of pictures");
+        assert!(samples > sync, "not every frame starts one");
+    }
+
+    /// The source plays video; a file with sound in it as well is common.
+    #[test]
+    fn a_file_with_sound_in_it_plays_its_video() {
+        let ctx = host();
+        let mut plugin = opened(&ctx, &sample("with-sound.mp4")).expect("it should open");
+
+        assert_eq!(codec_name(&plugin), "h264", "the video track is the one played");
+
+        let (samples, _, _) = read_all(&mut plugin);
+
+        assert_eq!(samples, 60);
+    }
+
+    /// The name of a file says nothing about what is in it.
+    #[test]
+    fn a_real_file_under_any_name_still_opens() {
+        let source = sample("h264.mp4");
+        let dir = std::env::temp_dir().join(format!("mstu-named-{}", std::process::id()));
+
+        fs::create_dir_all(&dir).expect("somewhere to put the copies");
+
+        for name in ["no-extension", "misleading.txt", "UPPER.MP4"] {
+            let path = dir.join(name);
+            fs::copy(&source, &path).expect("a copy under another name");
+
+            let ctx = host();
+
+            assert!(
+                opened(&ctx, &path).is_some(),
+                "{name} should open on what is in it"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Written in pieces rather than one run, which a recorder does so the
+    /// file survives being cut off. Those pieces are not read yet, and a
+    /// source that opens and then plays nothing would leave the pipeline
+    /// waiting forever, so the file is refused instead.
+    #[test]
+    fn a_fragmented_file_is_refused_rather_than_opened_empty() {
+        let ctx = host();
+
+        assert!(
+            opened(&ctx, &sample("fragmented.mp4")).is_none(),
+            "a file with nothing to play should not open"
+        );
+    }
+
+    /// Seeking lands on the sample covering the time asked for.
+    #[test]
+    fn seeking_into_a_real_file_lands_where_it_was_asked_to() {
+        let ctx = host();
+        let mut plugin = opened(&ctx, &sample("longgop.mp4")).expect("it should open");
+
+        // A second in, on a two second clip.
+        plugin.seek_to(1_000_000);
+
+        assert_eq!(plugin.position.load(Ordering::Relaxed), 1_000_000);
+
+        let next = plugin
+            .sample_reader
+            .as_mut()
+            .unwrap()
+            .peek_sample()
+            .expect("a sample")
+            .expect("there is more to read");
+
+        let micros = plugin.micros(next.start_time);
+
+        assert!(
+            micros <= 1_000_000,
+            "a seek lands on or before the time asked for, not after it: {micros}"
+        );
+    }
 }

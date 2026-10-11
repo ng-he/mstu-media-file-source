@@ -369,6 +369,41 @@ mod tests {
         assert_eq!(esds.es_desc.es_id, 2);
         assert!(esds.es_desc.sl_config.is_none());
     }
+
+    /// The audio config, which is two bytes of bit fields: five for the
+    /// profile, four for the sample rate, four for the channels.
+    #[test]
+    fn the_audio_config_is_read_out_of_its_bits() {
+        // 0x12 0x10: profile 2 (AAC LC), rate index 4, two channels.
+        let config =
+            DecoderSpecificDescriptor::read(&mut Cursor::new(&[0x12u8, 0x10][..]), 2).unwrap();
+
+        assert_eq!(config.profile, 2);
+        assert_eq!(config.freq_index, 4);
+        assert_eq!(config.chan_conf, 2);
+    }
+
+    /// A profile of 31 does not fit, so the real one is written after it.
+    #[test]
+    fn a_profile_that_does_not_fit_is_read_from_the_bits_after_it() {
+        assert_eq!(DecoderSpecificDescriptor::get_audio_object_type(0x10, 0x00), 2);
+
+        let escaped = DecoderSpecificDescriptor::get_audio_object_type(0xF8, 0x00);
+
+        assert!(escaped >= 32, "an escaped profile is 32 or more, not {escaped}");
+    }
+
+    /// Index 15 means the rate was written out in full, which moves where
+    /// everything after it sits.
+    #[test]
+    fn a_rate_outside_the_table_is_read_from_the_bytes_that_follow() {
+        let bytes = [0x17u8, 0x80, 0x00, 0x00, 0x20];
+
+        let config = DecoderSpecificDescriptor::read(&mut Cursor::new(&bytes[..]), 5).unwrap();
+
+        assert_eq!(config.profile, 2);
+        assert_eq!(config.freq_index, 15);
+    }
 }
 
 fn read_desc<R: Read>(reader: &mut R) -> Result<(u8, u32)> {
