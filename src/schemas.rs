@@ -1,5 +1,3 @@
-use std::ptr;
-
 use mstu_sdk::{
     Data, EnumSchema, EnumVariant, EventDescriptor, Field, Schema, Slice, Str, TYPE_BOOL,
     TYPE_BYTES, TYPE_F64, TYPE_I32, TYPE_STRING, TYPE_U32, TYPE_U64, Type, TypeKind::TypeEnum,
