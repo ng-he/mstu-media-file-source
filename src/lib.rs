@@ -14,8 +14,8 @@ use mstu_media::{
 };
 use mstu_sdk::{
     CommandDescriptor, EventDescriptor, HostContext, Logger, Message, Metadata, PluginDescriptor,
-    PluginHandle, ProcessContext, Schema, Slice, Str, Value, Writer, log_debug, log_error, log_info,
-    log_trace, log_warn, message, slice,
+    PluginHandle, ProcessContext, Schema, Slice, Str, Value, Writer, log_debug, log_error,
+    log_info, log_trace, log_warn, message, slice,
 };
 
 pub mod mp4;
@@ -72,7 +72,9 @@ const MAX_LAG: Duration = Duration::from_millis(500);
 /// Read rather than taken from the extension, since one of those is a fact
 /// and the other is a hint.
 fn is_iso_bmff(path: &Path) -> bool {
-    const FIRST: [&[u8; 4]; 7] = [b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot"];
+    const FIRST: [&[u8; 4]; 7] = [
+        b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot",
+    ];
 
     let Ok(mut file) = fs::File::open(path) else {
         return false;
@@ -204,7 +206,11 @@ impl MediaFileSourcePlugin {
         // is worse than refusing it: the pipeline would sit there waiting on
         // a source that will never produce. Fragmented files look like this,
         // since their samples are described in pieces further in.
-        let empty = match self.sample_reader.as_mut().map(|reader| reader.peek_sample()) {
+        let empty = match self
+            .sample_reader
+            .as_mut()
+            .map(|reader| reader.peek_sample())
+        {
             Some(Ok(None)) => true,
             Some(Err(err)) => {
                 log_error!(self.log, "cannot read '{}': {err}", self.filename);
@@ -469,7 +475,11 @@ extern "C" fn release(instance: PluginHandle) {
     unsafe {
         let plugin = Box::from_raw(instance as *mut MediaFileSourcePlugin);
 
-        log_info!(plugin.log, "released after {} sample(s)", plugin.samples.load(Ordering::Relaxed));
+        log_info!(
+            plugin.log,
+            "released after {} sample(s)",
+            plugin.samples.load(Ordering::Relaxed)
+        );
 
         drop(plugin);
     }
@@ -629,7 +639,9 @@ mod tests {
 
     #[test]
     fn knows_the_family_by_its_first_box() {
-        for name in [b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot"] {
+        for name in [
+            b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot",
+        ] {
             let file = Scratch::with("first", &box_named(name));
 
             assert!(
@@ -690,14 +702,20 @@ mod tests {
     }
 
     /// A plugin with a file open, built from the bytes of a fixture.
-    fn opened(ctx: &HostContext, video: &crate::mp4::fixture::Video) -> (MediaFileSourcePlugin, PathBuf) {
+    fn opened(
+        ctx: &HostContext,
+        video: &crate::mp4::fixture::Video,
+    ) -> (MediaFileSourcePlugin, PathBuf) {
         let dir = std::env::temp_dir().join(format!("mstu-source-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("somewhere to put it");
 
-        let path = dir.join(format!("{}.mp4", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()));
+        let path = dir.join(format!(
+            "{}.mp4",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
 
         fs::write(&path, crate::mp4::fixture::file(video)).expect("a file to open");
 
@@ -816,7 +834,10 @@ mod tests {
         plugin.seek_to(500_000);
 
         assert_eq!(plugin.position.load(Ordering::Relaxed), 500_000);
-        assert!(!plugin.ended.load(Ordering::Relaxed), "there is more to read");
+        assert!(
+            !plugin.ended.load(Ordering::Relaxed),
+            "there is more to read"
+        );
         assert!(plugin.anchor.is_some(), "the clock starts again from here");
 
         let _ = fs::remove_file(path);
@@ -920,15 +941,60 @@ mod real_files {
     }
 
     const SAMPLES: [Sample; 9] = [
-        Sample { file: "h264.mp4", codec: "h264", frames: 60, keys: 1 },
-        Sample { file: "h264.mov", codec: "h264", frames: 60, keys: 1 },
-        Sample { file: "hvc1.mp4", codec: "hevc", frames: 60, keys: 1 },
-        Sample { file: "hev1.mp4", codec: "hevc", frames: 60, keys: 1 },
-        Sample { file: "av1.mp4", codec: "av1", frames: 60, keys: 1 },
-        Sample { file: "vp9.mp4", codec: "vp9", frames: 60, keys: 1 },
-        Sample { file: "bframes.mp4", codec: "h264", frames: 60, keys: 1 },
-        Sample { file: "longgop.mp4", codec: "h264", frames: 60, keys: 3 },
-        Sample { file: "inorder.mp4", codec: "h264", frames: 60, keys: 1 },
+        Sample {
+            file: "h264.mp4",
+            codec: "h264",
+            frames: 60,
+            keys: 1,
+        },
+        Sample {
+            file: "h264.mov",
+            codec: "h264",
+            frames: 60,
+            keys: 1,
+        },
+        Sample {
+            file: "hvc1.mp4",
+            codec: "hevc",
+            frames: 60,
+            keys: 1,
+        },
+        Sample {
+            file: "hev1.mp4",
+            codec: "hevc",
+            frames: 60,
+            keys: 1,
+        },
+        Sample {
+            file: "av1.mp4",
+            codec: "av1",
+            frames: 60,
+            keys: 1,
+        },
+        Sample {
+            file: "vp9.mp4",
+            codec: "vp9",
+            frames: 60,
+            keys: 1,
+        },
+        Sample {
+            file: "bframes.mp4",
+            codec: "h264",
+            frames: 60,
+            keys: 1,
+        },
+        Sample {
+            file: "longgop.mp4",
+            codec: "h264",
+            frames: 60,
+            keys: 3,
+        },
+        Sample {
+            file: "inorder.mp4",
+            codec: "h264",
+            frames: 60,
+            keys: 1,
+        },
     ];
 
     fn sample(name: &str) -> PathBuf {
@@ -1006,8 +1072,8 @@ mod real_files {
 
         for expected in SAMPLES {
             let path = sample(expected.file);
-            let mut plugin = opened(&ctx, &path)
-                .unwrap_or_else(|| panic!("{} should open", expected.file));
+            let mut plugin =
+                opened(&ctx, &path).unwrap_or_else(|| panic!("{} should open", expected.file));
 
             assert_eq!(codec_name(&plugin), expected.codec, "{}", expected.file);
             assert!(
@@ -1032,7 +1098,10 @@ mod real_files {
 
         let (_, _, moved) = read_all(&mut plugin);
 
-        assert!(moved > 0, "three b-frames deep, something should be reordered");
+        assert!(
+            moved > 0,
+            "three b-frames deep, something should be reordered"
+        );
 
         // x264 reorders by default, so the file to compare against is the
         // one encoded with that turned off.
@@ -1060,7 +1129,11 @@ mod real_files {
         let ctx = host();
         let mut plugin = opened(&ctx, &sample("with-sound.mp4")).expect("it should open");
 
-        assert_eq!(codec_name(&plugin), "h264", "the video track is the one played");
+        assert_eq!(
+            codec_name(&plugin),
+            "h264",
+            "the video track is the one played"
+        );
 
         let (samples, _, _) = read_all(&mut plugin);
 

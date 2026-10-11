@@ -15,8 +15,8 @@ use mstu_media::{
     nalu,
 };
 
-use crate::media::FourCC;
 use crate::file::SampleInfo;
+use crate::media::FourCC;
 use crate::mp4::{
     Result, Sample,
     atom::{self},

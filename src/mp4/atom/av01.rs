@@ -1,7 +1,7 @@
 use std::io::Seek;
 
-use bytes::Bytes;
 use byteorder::{BigEndian, ReadBytesExt};
+use bytes::Bytes;
 
 use crate::mp4::*;
 

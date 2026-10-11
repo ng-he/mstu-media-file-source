@@ -386,11 +386,17 @@ mod tests {
     /// A profile of 31 does not fit, so the real one is written after it.
     #[test]
     fn a_profile_that_does_not_fit_is_read_from_the_bits_after_it() {
-        assert_eq!(DecoderSpecificDescriptor::get_audio_object_type(0x10, 0x00), 2);
+        assert_eq!(
+            DecoderSpecificDescriptor::get_audio_object_type(0x10, 0x00),
+            2
+        );
 
         let escaped = DecoderSpecificDescriptor::get_audio_object_type(0xF8, 0x00);
 
-        assert!(escaped >= 32, "an escaped profile is 32 or more, not {escaped}");
+        assert!(
+            escaped >= 32,
+            "an escaped profile is 32 or more, not {escaped}"
+        );
     }
 
     /// Index 15 means the rate was written out in full, which moves where

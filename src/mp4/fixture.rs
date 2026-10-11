@@ -29,7 +29,10 @@ pub fn full_boxed(name: &[u8; 4], version: u8, payload: &[u8]) -> Vec<u8> {
 }
 
 fn u32s(values: &[u32]) -> Vec<u8> {
-    values.iter().flat_map(|value| value.to_be_bytes()).collect()
+    values
+        .iter()
+        .flat_map(|value| value.to_be_bytes())
+        .collect()
 }
 
 /// A table of entries, counted as the sample tables count them.
@@ -125,7 +128,10 @@ impl Video {
             let first = (chunk * self.per_chunk) as usize;
             let last = ((chunk + 1) * self.per_chunk).min(self.samples()) as usize;
 
-            at += self.sizes[first..last].iter().map(|size| *size as u64).sum::<u64>();
+            at += self.sizes[first..last]
+                .iter()
+                .map(|size| *size as u64)
+                .sum::<u64>();
         }
 
         offsets
@@ -161,12 +167,12 @@ pub fn avc1_with_short_lengths() -> Vec<u8> {
 
 fn avcc(length_size: u8) -> Vec<u8> {
     let payload = vec![
-        1,                      // configuration version
-        0x64,                   // profile
-        0x00,                   // compatibility
-        0x1f,                   // level
+        1,                        // configuration version
+        0x64,                     // profile
+        0x00,                     // compatibility
+        0x1f,                     // level
         0xFC | (length_size - 1), // reserved bits, then the length size
-        0xE0 | 1,               // reserved bits, then one sps
+        0xE0 | 1,                 // reserved bits, then one sps
         0x00,
         0x04, // sps length
         0x67,
@@ -344,10 +350,10 @@ fn mdia(video: &Video, media_start: u64) -> Vec<u8> {
         mdhd.extend_from_slice(&video.timescale.to_be_bytes());
         mdhd.extend_from_slice(&duration.to_be_bytes());
     } else {
-    mdhd.extend_from_slice(&0u32.to_be_bytes()); // created
-    mdhd.extend_from_slice(&0u32.to_be_bytes()); // modified
-    mdhd.extend_from_slice(&video.timescale.to_be_bytes());
-    mdhd.extend_from_slice(&(video.samples() * video.delta).to_be_bytes());
+        mdhd.extend_from_slice(&0u32.to_be_bytes()); // created
+        mdhd.extend_from_slice(&0u32.to_be_bytes()); // modified
+        mdhd.extend_from_slice(&video.timescale.to_be_bytes());
+        mdhd.extend_from_slice(&(video.samples() * video.delta).to_be_bytes());
     }
     mdhd.extend_from_slice(&0x55c4u16.to_be_bytes()); // language
     mdhd.extend_from_slice(&0u16.to_be_bytes()); // pre-defined

@@ -18,10 +18,10 @@ use error::Error;
 
 pub mod atom;
 
+pub mod error;
 /// Small mp4 files, built byte by byte, for testing the reader on.
 #[cfg(test)]
 pub mod fixture;
-pub mod error;
 pub mod track;
 
 pub use track::Track;
@@ -245,7 +245,8 @@ pub fn open(path: PathBuf) -> Result<File> {
         .map(|(id, _)| *id)
         .ok_or(Error::InvalidData("video track not found"))?;
 
-    let inband_sequence_header = starts_with_sequence_header(&reader, &mut buf_reader, video_track_id);
+    let inband_sequence_header =
+        starts_with_sequence_header(&reader, &mut buf_reader, video_track_id);
 
     Ok(File {
         buf_reader,
@@ -408,7 +409,8 @@ mod tests {
         let (reader, track_id) = reader(&video);
         let track = &reader.tracks()[&track_id];
 
-        let mut expected = (fixture::boxed(b"ftyp", b"isom\0\0\x02\0isomiso2avc1mp41").len() + 8) as u64;
+        let mut expected =
+            (fixture::boxed(b"ftyp", b"isom\0\0\x02\0isomiso2avc1mp41").len() + 8) as u64;
 
         for (index, size) in video.sizes.iter().enumerate() {
             let sample_id = index as u32 + 1;
@@ -708,7 +710,9 @@ mod codecs {
 
         assert_eq!(
             params.config_obus.as_ref(),
-            &[0x0a, 0x0b, 0x00, 0x00, 0x00, 0x04, 0x3c, 0xff, 0xbc, 0x02, 0xf8, 0x00, 0x40]
+            &[
+                0x0a, 0x0b, 0x00, 0x00, 0x00, 0x04, 0x3c, 0xff, 0xbc, 0x02, 0xf8, 0x00, 0x40
+            ]
         );
     }
 
@@ -874,7 +878,10 @@ mod variants {
         let track = &reader.tracks()[&id];
 
         assert_eq!(track.timescale(), 90_000);
-        assert_eq!(track.media_duration(), (video.samples() * video.delta) as u64);
+        assert_eq!(
+            track.media_duration(),
+            (video.samples() * video.delta) as u64
+        );
         assert_eq!(track.sample_count(), video.samples());
     }
 

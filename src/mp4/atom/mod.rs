@@ -4,6 +4,7 @@ use crate::media::{FourCC, nalu::Nalu};
 use crate::mp4::{Result, error::Error};
 use byteorder::{BigEndian, ReadBytesExt};
 
+pub mod av01;
 pub mod avc1;
 pub mod co64;
 pub mod ctts;
@@ -38,9 +39,9 @@ pub mod trex;
 pub mod tx3g;
 pub mod udta;
 pub mod vmhd;
-pub mod av01;
 pub mod vp09;
 
+pub use av01::{Av01, Av1c};
 pub use avc1::Avc1;
 pub use co64::Co64;
 pub use ctts::Ctts;
@@ -75,7 +76,6 @@ pub use trex::Trex;
 pub use tx3g::Tx3g;
 pub use udta::Udta;
 pub use vmhd::Vmhd;
-pub use av01::{Av01, Av1c};
 pub use vp09::Vp09;
 
 pub const HEADER_SIZE: u64 = 8;

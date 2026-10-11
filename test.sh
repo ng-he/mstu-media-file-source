@@ -7,4 +7,6 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+# Unformatted code fails too, the same as a failing test would.
+cargo fmt -- --check
 cargo test "$@"
